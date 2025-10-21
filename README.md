@@ -1,21 +1,42 @@
-# bun-react-tailwind-shadcn-template
+# Tools
 
-To install dependencies:
+A collection of various utilities and tools to simplify everyday tasks.
+
+## About
+
+This project serves as a personal toolkit containing different tools and utilities that I create to automate and simplify various aspects of my workflow.
+
+## Tech Stack
+
+- **Runtime**: [Bun](https://bun.com)
+- **Frontend**: React + TypeScript
+- **Styling**: Tailwind CSS
+- **UI Components**: shadcn/ui
+
+## Getting Started
+
+Install dependencies:
 
 ```bash
 bun install
 ```
 
-To start a development server:
+Start development server:
 
 ```bash
 bun dev
 ```
 
-To run for production:
+Run for production:
 
 ```bash
 bun start
 ```
 
-This project was created using `bun init` in bun v1.3.0. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+## Project Structure
+
+More tools will be added as the project evolves.
+
+## License
+
+Personal project - use at your own discretion.
