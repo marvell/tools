@@ -107,6 +107,31 @@ const formatFileSize = (bytes: number): string => {
 
 console.log("\n🚀 Starting build process...\n");
 
+// Capture build information
+const gitHash = await Bun.$`git rev-parse --short HEAD`.text().catch(() => 'unknown');
+const buildDate = new Date().toISOString();
+
+console.log(`📝 Build Info:`);
+console.log(`   Git Hash: ${gitHash.trim()}`);
+console.log(`   Build Date: ${buildDate}\n`);
+
+// Generate buildInfo.ts
+const buildInfoContent = `// This file is auto-generated during build
+// Do not edit manually
+
+export interface BuildInfo {
+  gitHash: string;
+  buildDate: string;
+}
+
+export const buildInfo: BuildInfo = {
+  gitHash: '${gitHash.trim()}',
+  buildDate: '${buildDate}',
+};
+`;
+
+await Bun.write(path.join(process.cwd(), 'src', 'buildInfo.ts'), buildInfoContent);
+
 const cliConfig = parseArgs();
 const outdir = cliConfig.outdir || path.join(process.cwd(), "dist");
 

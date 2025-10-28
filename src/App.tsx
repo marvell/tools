@@ -1,4 +1,5 @@
 import "./index.css";
+import { Footer } from "./components/Footer";
 
 const tools = [
   {
@@ -83,9 +84,7 @@ export function App() {
         </div>
 
         {/* Footer */}
-        <div className="text-center text-sm text-muted-foreground">
-          <p>Built with Bun and React</p>
-        </div>
+        <Footer />
       </div>
     </div>
   );

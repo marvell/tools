@@ -1,5 +1,6 @@
 import "./index.css";
 import { useState, useEffect } from "react";
+import { Footer } from "./components/Footer";
 
 // Types
 type CalculationMode = "distance" | "time" | "pace";
@@ -444,6 +445,9 @@ export function RunningCalc() {
             ← Back to Marvell Tools
           </a>
         </div>
+
+        {/* Footer */}
+        <Footer />
       </div>
     </div>
   );

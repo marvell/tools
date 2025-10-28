@@ -1,5 +1,6 @@
 import "./index.css";
 import { useState } from "react";
+import { Footer } from "./components/Footer";
 
 // Types
 interface TranscriptSegment {
@@ -308,6 +309,9 @@ export function YouTubeTranscript() {
             ← Back to Marvell Tools
           </a>
         </div>
+
+        {/* Footer */}
+        <Footer />
       </div>
     </div>
   );
