@@ -153,14 +153,26 @@ const server = serve({
             offset: parseInt(segment.start_ms),
           }));
 
-          // Extract video metadata
+          // Extract video metadata - handle Text objects by converting to strings
+          const title = info.basic_info.title?.toString() || info.basic_info.title || "Unknown Title";
+          const description = info.basic_info.short_description?.toString() || info.basic_info.short_description || "";
+
+          // Debug logging for troubleshooting metadata issues
+          if (title === "Unknown Title" || !description) {
+            console.error("[DEBUG] Metadata extraction issue:", {
+              videoId,
+              titleType: typeof info.basic_info.title,
+              titleValue: info.basic_info.title,
+              descType: typeof info.basic_info.short_description,
+              descValue: info.basic_info.short_description,
+              availableKeys: Object.keys(info.basic_info)
+            });
+          }
+
           const metadata = {
-            title: info.basic_info.title || "Unknown Title",
-            description: info.basic_info.short_description || "",
-            thumbnail: info.basic_info.thumbnail?.[0]?.url ||
-                      (info.basic_info.thumbnail && info.basic_info.thumbnail.length > 0
-                        ? info.basic_info.thumbnail[info.basic_info.thumbnail.length - 1].url
-                        : `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`),
+            title,
+            description,
+            thumbnail: info.basic_info.thumbnail?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
           };
 
           logRequest(ip, videoId, 200, `Success: ${transcript.length} segments`);
