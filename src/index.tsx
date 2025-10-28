@@ -2,7 +2,7 @@ import { serve } from "bun";
 import index from "./index.html";
 import runningCalc from "./running-calc.html";
 import youtubeTranscript from "./youtube-transcript.html";
-import { Innertube } from "youtubei.js";
+import { Innertube, UniversalCache } from "youtubei.js";
 
 // Rate limiter: track IP addresses and their request timestamps
 interface RateLimitEntry {
@@ -127,7 +127,14 @@ const server = serve({
         }
 
         try {
-          const yt = await Innertube.create();
+          // Create Innertube instance with caching and session support
+          // This helps YouTube API return consistent metadata, especially on remote servers
+          const yt = await Innertube.create({
+            cache: new UniversalCache(true), // Enable persistent caching
+            generate_session_locally: true,   // Generate session data locally
+            enable_session_cache: true,       // Cache session across requests
+            po_token: process.env.PO_TOKEN,   // Optional: Proof of Origin token for bot protection
+          });
           const info = await yt.getInfo(videoId);
           const transcriptData = await info.getTranscript();
 
@@ -161,11 +168,26 @@ const server = serve({
           if (title === "Unknown Title" || !description) {
             console.error("[DEBUG] Metadata extraction issue:", {
               videoId,
+              ip,
               titleType: typeof info.basic_info.title,
               titleValue: info.basic_info.title,
+              titleText: info.basic_info.title?.text || info.basic_info.title?.runs?.[0]?.text || null,
               descType: typeof info.basic_info.short_description,
               descValue: info.basic_info.short_description,
-              availableKeys: Object.keys(info.basic_info)
+              descText: info.basic_info.short_description?.text || info.basic_info.short_description?.runs?.[0]?.text || null,
+              availableKeys: Object.keys(info.basic_info),
+              hasChannel: !!info.basic_info.channel,
+              isPrivate: info.basic_info.is_private,
+              isUnlisted: info.basic_info.is_unlisted,
+            });
+          } else {
+            // Log successful metadata extraction for comparison
+            console.log("[DEBUG] Metadata extracted successfully:", {
+              videoId,
+              ip,
+              titleLength: title.length,
+              descLength: description.length,
+              hasThumbnail: !!info.basic_info.thumbnail?.[0]?.url
             });
           }
 
@@ -188,6 +210,17 @@ const server = serve({
           );
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
+          // Enhanced error logging for debugging
+          console.error("[ERROR] Failed to fetch transcript:", {
+            videoId,
+            ip,
+            error: errorMessage,
+            errorType: error?.constructor?.name,
+            stack: error instanceof Error ? error.stack : undefined,
+            timestamp: new Date().toISOString()
+          });
+
           logRequest(ip, videoId, 400, `Error: ${errorMessage}`);
           return Response.json(
             { success: false, error: errorMessage },
