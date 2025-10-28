@@ -153,9 +153,19 @@ const server = serve({
             offset: parseInt(segment.start_ms),
           }));
 
+          // Extract video metadata
+          const metadata = {
+            title: info.basic_info.title || "Unknown Title",
+            description: info.basic_info.short_description || "",
+            thumbnail: info.basic_info.thumbnail?.[0]?.url ||
+                      (info.basic_info.thumbnail && info.basic_info.thumbnail.length > 0
+                        ? info.basic_info.thumbnail[info.basic_info.thumbnail.length - 1].url
+                        : `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`),
+          };
+
           logRequest(ip, videoId, 200, `Success: ${transcript.length} segments`);
           return Response.json(
-            { success: true, transcript },
+            { success: true, transcript, metadata },
             {
               headers: {
                 "X-RateLimit-Limit": RATE_LIMIT_MAX_REQUESTS.toString(),

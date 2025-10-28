@@ -8,6 +8,12 @@ interface TranscriptSegment {
   offset: number;
 }
 
+interface VideoMetadata {
+  title: string;
+  description: string;
+  thumbnail: string;
+}
+
 // Utility function to extract video ID from various YouTube URL formats
 const extractVideoId = (url: string): string | null => {
   if (!url.trim()) return null;
@@ -43,11 +49,15 @@ export function YouTubeTranscript() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [videoId, setVideoId] = useState("");
+  const [metadata, setMetadata] = useState<VideoMetadata | null>(null);
+  const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
 
   const fetchTranscript = async () => {
     setError("");
     setTranscript([]);
     setVideoId("");
+    setMetadata(null);
+    setIsDescriptionExpanded(false);
 
     const extractedId = extractVideoId(url);
 
@@ -69,6 +79,7 @@ export function YouTubeTranscript() {
       }
 
       setTranscript(data.transcript);
+      setMetadata(data.metadata);
     } catch (err) {
       setError("Network error. Please check your connection and try again.");
     } finally {
@@ -126,6 +137,8 @@ export function YouTubeTranscript() {
     setTranscript([]);
     setError("");
     setVideoId("");
+    setMetadata(null);
+    setIsDescriptionExpanded(false);
   };
 
   return (
@@ -182,6 +195,44 @@ export function YouTubeTranscript() {
           {error && (
             <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-md">
               <p className="text-sm text-destructive">{error}</p>
+            </div>
+          )}
+
+          {/* Video metadata */}
+          {metadata && (
+            <div className="space-y-4 pt-4 border-t border-border">
+              <div className="flex flex-col md:flex-row gap-4">
+                {/* Thumbnail */}
+                <div className="flex-shrink-0">
+                  <img
+                    src={metadata.thumbnail}
+                    alt={metadata.title}
+                    className="w-full md:w-64 rounded-md object-cover"
+                  />
+                </div>
+
+                {/* Title and Description */}
+                <div className="flex-1 space-y-2">
+                  <h3 className="text-xl font-semibold text-card-foreground">
+                    {metadata.title}
+                  </h3>
+                  {metadata.description && (
+                    <div className="space-y-2">
+                      <p className={`text-sm text-muted-foreground whitespace-pre-wrap ${!isDescriptionExpanded ? "line-clamp-6" : ""}`}>
+                        {metadata.description}
+                      </p>
+                      {metadata.description.length > 300 && (
+                        <button
+                          onClick={() => setIsDescriptionExpanded(!isDescriptionExpanded)}
+                          className="text-sm text-primary hover:underline"
+                        >
+                          {isDescriptionExpanded ? "Показать меньше" : "Показать больше"}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
