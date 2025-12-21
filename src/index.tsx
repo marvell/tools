@@ -2,6 +2,7 @@ import { serve } from "bun";
 import index from "./index.html";
 import runningCalc from "./running-calc.html";
 import youtubeTranscript from "./youtube-transcript.html";
+import mermaidViewer from "./mermaid-viewer.html";
 import { Innertube, UniversalCache } from "youtubei.js";
 
 // Rate limiter: track IP addresses and their request timestamps
@@ -240,6 +241,7 @@ const server = serve({
     // Tool pages
     "/running-calc": runningCalc,
     "/youtube-transcript": youtubeTranscript,
+    "/mermaid-viewer": mermaidViewer,
 
     // Serve index.html for all unmatched routes.
     "/*": index,

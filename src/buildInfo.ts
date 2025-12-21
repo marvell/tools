@@ -7,6 +7,6 @@ export interface BuildInfo {
 }
 
 export const buildInfo: BuildInfo = {
-  gitHash: 'd36b24f',
-  buildDate: '2025-10-28T12:28:38.544Z',
+  gitHash: '823e4eb',
+  buildDate: '2025-12-21T11:47:17.874Z',
 };

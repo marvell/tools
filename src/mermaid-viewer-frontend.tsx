@@ -1,11 +1,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { RunningCalc } from "./RunningCalc";
+import { MermaidViewer } from "./MermaidViewer";
 
 const elem = document.getElementById("root")!;
 const app = (
   <StrictMode>
-    <RunningCalc />
+    <MermaidViewer />
   </StrictMode>
 );
 
