@@ -79,6 +79,7 @@ export function MermaidViewer() {
   });
 
   const { zoom, pan, isDragging } = state;
+  const { fitToView } = controls;
 
   const hasCode = code.trim().length > 0;
 
@@ -121,6 +122,15 @@ export function MermaidViewer() {
           svgEl.style.maxWidth = "none";
           svgEl.style.maxHeight = "none";
         }
+
+        // Auto fit-to-view after layout
+        requestAnimationFrame(() => {
+          if (!isCurrent || !svgEl) return;
+          const containerRect = containerRef.current?.getBoundingClientRect();
+          if (containerRect) {
+            fitToView(svgEl.clientWidth, svgEl.clientHeight, containerRect.width, containerRect.height);
+          }
+        });
       } catch (err) {
         if (!isCurrent) return;
         const message = err instanceof Error ? err.message : "Invalid Mermaid syntax";
@@ -134,7 +144,7 @@ export function MermaidViewer() {
     return () => {
       isCurrent = false;
     };
-  }, [code]);
+  }, [code, fitToView]);
 
   // Global paste listener
   useEffect(() => {
@@ -142,7 +152,6 @@ export function MermaidViewer() {
       const text = e.clipboardData?.getData("text");
       if (text) {
         setCode(text);
-        controls.reset();
         showControlsTemporarily();
       }
     };
@@ -227,7 +236,6 @@ export function MermaidViewer() {
       const text = await navigator.clipboard.readText();
       if (text) {
         setCode(text);
-        controls.reset();
         showControlsTemporarily();
       }
     } catch {
@@ -237,7 +245,6 @@ export function MermaidViewer() {
 
   const handleLoadExample = (example: (typeof EXAMPLES)[0]) => {
     setCode(example.code);
-    controls.reset();
     showControlsTemporarily();
   };
 
