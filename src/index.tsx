@@ -4,6 +4,7 @@ import runningCalc from "./running-calc.html";
 import youtubeTranscript from "./youtube-transcript.html";
 import mermaidViewer from "./mermaid-viewer.html";
 import streamAssembler from "./stream-assembler.html";
+import textDiff from "./text-diff.html";
 import { Innertube, UniversalCache } from "youtubei.js";
 
 // Rate limiter: track IP addresses and their request timestamps
@@ -77,6 +78,24 @@ function logRequest(ip: string, videoId: string, status: number, message: string
   }));
 }
 
+function extractTextDebugValue(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return null;
+
+  if ("text" in value && typeof value.text === "string") {
+    return value.text;
+  }
+
+  if ("runs" in value && Array.isArray(value.runs)) {
+    const firstRun = value.runs[0];
+    if (firstRun && typeof firstRun === "object" && "text" in firstRun && typeof firstRun.text === "string") {
+      return firstRun.text;
+    }
+  }
+
+  return null;
+}
+
 const server = serve({
   routes: {
     // API endpoint for fetching YouTube transcripts
@@ -87,7 +106,7 @@ const server = serve({
         const forwardedFor = req.headers.get("x-forwarded-for");
         const realIp = req.headers.get("x-real-ip");
         const remoteAddress = server.requestIP(req);
-        const ip = forwardedFor?.split(',')[0].trim() || realIp || remoteAddress?.address || "127.0.0.1";
+        const ip = forwardedFor?.split(",")[0]?.trim() || realIp || remoteAddress?.address || "127.0.0.1";
 
         // Validate Video ID
         if (!videoId) {
@@ -173,10 +192,10 @@ const server = serve({
               ip,
               titleType: typeof info.basic_info.title,
               titleValue: info.basic_info.title,
-              titleText: info.basic_info.title?.text || info.basic_info.title?.runs?.[0]?.text || null,
+              titleText: extractTextDebugValue(info.basic_info.title),
               descType: typeof info.basic_info.short_description,
               descValue: info.basic_info.short_description,
-              descText: info.basic_info.short_description?.text || info.basic_info.short_description?.runs?.[0]?.text || null,
+              descText: extractTextDebugValue(info.basic_info.short_description),
               availableKeys: Object.keys(info.basic_info),
               hasChannel: !!info.basic_info.channel,
               isPrivate: info.basic_info.is_private,
@@ -244,6 +263,7 @@ const server = serve({
     "/youtube-transcript": youtubeTranscript,
     "/mermaid-viewer": mermaidViewer,
     "/stream-assembler": streamAssembler,
+    "/text-diff": textDiff,
 
     // Serve index.html for all unmatched routes.
     "/*": index,

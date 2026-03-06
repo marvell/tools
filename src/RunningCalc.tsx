@@ -29,12 +29,12 @@ const parseDistance = (input: string): number | null => {
   const miMatch = cleaned.match(/^([\d.]+)(?:mi?|miles?)$/);
 
   if (miMatch) {
-    const miles = parseFloat(miMatch[1]);
+    const miles = parseFloat(miMatch[1]!);
     return miles * 1609.344; // Convert miles to meters
   }
 
   if (kmMatch) {
-    const km = parseFloat(kmMatch[1]);
+    const km = parseFloat(kmMatch[1]!);
     return km * 1000; // Convert km to meters
   }
 
@@ -49,25 +49,25 @@ const parseTime = (input: string): number | null => {
   // Try HH:MM:SS or MM:SS format
   const colonMatch = cleaned.match(/^(?:(\d+):)?(\d+):(\d+)$/);
   if (colonMatch) {
-    const hours = colonMatch[1] ? parseInt(colonMatch[1]) : 0;
-    const minutes = parseInt(colonMatch[2]);
-    const seconds = parseInt(colonMatch[3]);
+    const hours = colonMatch[1] ? parseInt(colonMatch[1]!, 10) : 0;
+    const minutes = parseInt(colonMatch[2]!, 10);
+    const seconds = parseInt(colonMatch[3]!, 10);
     return hours * 3600 + minutes * 60 + seconds;
   }
 
   // Try human-friendly format: 1h30m, 45m, 30s, 1h30m45s
   const parts = cleaned.match(/(?:(\d+)h)?(?:(\d+)m(?:in)?)?(?:(\d+)s(?:ec)?)?/);
   if (parts && (parts[1] || parts[2] || parts[3])) {
-    const hours = parts[1] ? parseInt(parts[1]) : 0;
-    const minutes = parts[2] ? parseInt(parts[2]) : 0;
-    const seconds = parts[3] ? parseInt(parts[3]) : 0;
+    const hours = parts[1] ? parseInt(parts[1]!, 10) : 0;
+    const minutes = parts[2] ? parseInt(parts[2]!, 10) : 0;
+    const seconds = parts[3] ? parseInt(parts[3]!, 10) : 0;
     return hours * 3600 + minutes * 60 + seconds;
   }
 
   // Try just a number (assume minutes)
   const numberMatch = cleaned.match(/^(\d+(?:\.\d+)?)$/);
   if (numberMatch) {
-    return Math.round(parseFloat(numberMatch[1]) * 60);
+    return Math.round(parseFloat(numberMatch[1]!) * 60);
   }
 
   return null;
@@ -81,15 +81,15 @@ const parsePace = (input: string): number | null => {
   // Try MM:SS format (e.g., 5:30 for 5:30/km)
   const colonMatch = cleaned.match(/^(\d+):(\d+)$/);
   if (colonMatch) {
-    const minutes = parseInt(colonMatch[1]);
-    const seconds = parseInt(colonMatch[2]);
+    const minutes = parseInt(colonMatch[1]!, 10);
+    const seconds = parseInt(colonMatch[2]!, 10);
     return minutes * 60 + seconds;
   }
 
   // Try decimal minutes (e.g., 5.5 for 5:30/km)
   const numberMatch = cleaned.match(/^(\d+(?:\.\d+)?)$/);
   if (numberMatch) {
-    return Math.round(parseFloat(numberMatch[1]) * 60);
+    return Math.round(parseFloat(numberMatch[1]!) * 60);
   }
 
   return null;
@@ -133,8 +133,9 @@ const PACE_BENCHMARKS = [
 
 const getPaceBenchmark = (secondsPerKm: number) => {
   for (let i = 0; i < PACE_BENCHMARKS.length; i++) {
-    if (secondsPerKm <= PACE_BENCHMARKS[i].pace) {
-      return PACE_BENCHMARKS[i];
+    const benchmark = PACE_BENCHMARKS[i]!;
+    if (secondsPerKm <= benchmark.pace) {
+      return benchmark;
     }
   }
   return { label: "Relaxed", pace: 600, color: "bg-gray-500" };

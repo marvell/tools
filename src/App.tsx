@@ -46,6 +46,17 @@ const tools = [
       </svg>
     ),
   },
+  {
+    id: "05",
+    name: "text diff",
+    description: "paste two versions side by side and inspect the exact diff",
+    href: "/text-diff",
+    icon: (
+      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10 4H6a2 2 0 00-2 2v12a2 2 0 002 2h4m4-16h4a2 2 0 012 2v12a2 2 0 01-2 2h-4M8 8h4m-4 4h8m-8 4h4" />
+      </svg>
+    ),
+  },
 ];
 
 export function App() {

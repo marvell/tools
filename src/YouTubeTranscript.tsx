@@ -26,7 +26,8 @@ const extractVideoId = (url: string): string | null => {
 
   for (const pattern of patterns) {
     const match = url.match(pattern);
-    if (match) return match[1];
+    const videoId = match?.[1];
+    if (videoId) return videoId;
   }
 
   return null;
