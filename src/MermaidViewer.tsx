@@ -24,6 +24,11 @@ mermaid.initialize({
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 5;
 
+const extractMermaidCode = (input: string) => {
+  const fenceMatch = input.match(/```[ \t]*mermaid[^\n\r]*\r?\n([\s\S]*?)\r?\n```/i);
+  return (fenceMatch?.[1] ?? input).trim();
+};
+
 // Example diagrams
 const EXAMPLES = [
   {
@@ -151,7 +156,7 @@ export function MermaidViewer() {
     const handlePaste = (e: ClipboardEvent) => {
       const text = e.clipboardData?.getData("text");
       if (text) {
-        setCode(text);
+        setCode(extractMermaidCode(text));
         showControlsTemporarily();
       }
     };
@@ -235,7 +240,7 @@ export function MermaidViewer() {
     try {
       const text = await navigator.clipboard.readText();
       if (text) {
-        setCode(text);
+        setCode(extractMermaidCode(text));
         showControlsTemporarily();
       }
     } catch {
