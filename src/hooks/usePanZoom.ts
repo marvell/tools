@@ -44,6 +44,7 @@ export interface UsePanZoomResult {
   controls: PanZoomControls;
   handlers: PanZoomHandlers;
   containerRef: RefObject<HTMLDivElement | null>;
+  setContainerRef: (node: HTMLDivElement | null) => void;
 }
 
 export function usePanZoom(config: PanZoomConfig = {}): UsePanZoomResult {
@@ -59,6 +60,13 @@ export function usePanZoom(config: PanZoomConfig = {}): UsePanZoomResult {
   const [isDragging, setIsDragging] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
+
+  // Callback ref so the wheel listener (re)attaches whenever the canvas mounts.
+  const setContainer = useCallback((node: HTMLDivElement | null) => {
+    containerRef.current = node;
+    setContainerEl(node);
+  }, []);
 
   // Refs for gesture tracking (avoid stale closures)
   const stateRef = useRef({ zoom: initialZoom, pan: initialPan });
@@ -129,42 +137,54 @@ export function usePanZoom(config: PanZoomConfig = {}): UsePanZoomResult {
     momentumRef.current = requestAnimationFrame(animate);
   }, []);
 
-  // Handle mouse wheel zoom - zoom towards cursor position
+  // Handle wheel/trackpad gestures (Figma/Miro style):
+  // - Pinch (ctrlKey) or Cmd/Ctrl + scroll => zoom towards cursor
+  // - Plain two-finger swipe => pan
   const handleWheel = useCallback(
     (e: WheelEvent) => {
       e.preventDefault();
+      stopMomentum();
 
       const container = containerRef.current;
       if (!container) return;
 
       const rect = container.getBoundingClientRect();
-      const cursorX = e.clientX - rect.left - rect.width / 2;
-      const cursorY = e.clientY - rect.top - rect.height / 2;
 
-      const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      const oldZoom = stateRef.current.zoom;
-      const newZoom = clampZoom(oldZoom * delta);
+      // Browsers report trackpad pinch as a wheel event with ctrlKey set.
+      const isZoomGesture = e.ctrlKey || e.metaKey;
 
-      // Adjust pan to keep cursor point stationary
-      const zoomRatio = newZoom / oldZoom;
-      const oldPan = stateRef.current.pan;
-      const newPanX = cursorX - (cursorX - oldPan.x) * zoomRatio;
-      const newPanY = cursorY - (cursorY - oldPan.y) * zoomRatio;
+      if (isZoomGesture) {
+        const cursorX = e.clientX - rect.left - rect.width / 2;
+        const cursorY = e.clientY - rect.top - rect.height / 2;
 
-      setZoom(newZoom);
-      setPan({ x: newPanX, y: newPanY });
+        // Exponential scaling keeps zoom speed smooth across pinch and scroll.
+        const oldZoom = stateRef.current.zoom;
+        const newZoom = clampZoom(oldZoom * Math.exp(-e.deltaY * 0.01));
+
+        // Adjust pan to keep cursor point stationary
+        const zoomRatio = newZoom / oldZoom;
+        const oldPan = stateRef.current.pan;
+        const newPanX = cursorX - (cursorX - oldPan.x) * zoomRatio;
+        const newPanY = cursorY - (cursorY - oldPan.y) * zoomRatio;
+
+        setZoom(newZoom);
+        setPan({ x: newPanX, y: newPanY });
+      } else {
+        // Two-finger swipe pans the canvas (natural scrolling direction).
+        const oldPan = stateRef.current.pan;
+        setPan({ x: oldPan.x - e.deltaX, y: oldPan.y - e.deltaY });
+      }
     },
-    [clampZoom]
+    [clampZoom, stopMomentum]
   );
 
-  // Setup wheel event listener
+  // Setup wheel event listener (re-runs when the container element mounts)
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    if (!containerEl) return;
 
-    container.addEventListener("wheel", handleWheel, { passive: false });
-    return () => container.removeEventListener("wheel", handleWheel);
-  }, [handleWheel]);
+    containerEl.addEventListener("wheel", handleWheel, { passive: false });
+    return () => containerEl.removeEventListener("wheel", handleWheel);
+  }, [containerEl, handleWheel]);
 
   // Cleanup momentum on unmount
   useEffect(() => {
@@ -402,5 +422,6 @@ export function usePanZoom(config: PanZoomConfig = {}): UsePanZoomResult {
       onTouchEnd: handleTouchEnd,
     },
     containerRef,
+    setContainerRef: setContainer,
   };
 }

@@ -78,7 +78,7 @@ export function MermaidViewer() {
   const diagramRef = useRef<HTMLDivElement>(null);
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { state, controls, handlers, containerRef } = usePanZoom({
+  const { state, controls, handlers, containerRef, setContainerRef } = usePanZoom({
     minZoom: MIN_ZOOM,
     maxZoom: MAX_ZOOM,
   });
@@ -384,7 +384,7 @@ export function MermaidViewer() {
 
       {/* Diagram canvas - full screen */}
       <div
-        ref={containerRef}
+        ref={setContainerRef}
         className="absolute inset-0 z-10"
         style={{ cursor: isDragging ? "grabbing" : "grab" }}
         onMouseDown={handlers.onMouseDown}
@@ -529,7 +529,7 @@ export function MermaidViewer() {
 
         {/* Bottom hint */}
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-xs text-white/20">
-          Scroll to zoom • Drag to pan
+          Two-finger swipe to pan • Pinch or ⌘+scroll to zoom • Drag to pan
         </div>
       </div>
     </div>
