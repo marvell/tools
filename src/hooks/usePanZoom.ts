@@ -384,14 +384,25 @@ export function usePanZoom(config: PanZoomConfig = {}): UsePanZoomResult {
     [isDragging, startMomentum]
   );
 
-  // Control functions
-  const zoomIn = useCallback(() => {
-    setZoom((z) => clampZoom(z * 1.2));
-  }, [clampZoom]);
+  // Zoom towards the viewport center (keeps the centered point stationary)
+  const zoomBy = useCallback(
+    (factor: number) => {
+      const oldZoom = stateRef.current.zoom;
+      const newZoom = clampZoom(oldZoom * factor);
+      if (newZoom === oldZoom) return;
 
-  const zoomOut = useCallback(() => {
-    setZoom((z) => clampZoom(z / 1.2));
-  }, [clampZoom]);
+      const zoomRatio = newZoom / oldZoom;
+      const oldPan = stateRef.current.pan;
+      setZoom(newZoom);
+      setPan({ x: oldPan.x * zoomRatio, y: oldPan.y * zoomRatio });
+    },
+    [clampZoom]
+  );
+
+  // Control functions
+  const zoomIn = useCallback(() => zoomBy(1.2), [zoomBy]);
+
+  const zoomOut = useCallback(() => zoomBy(1 / 1.2), [zoomBy]);
 
   const reset = useCallback(() => {
     setZoom(initialZoom);

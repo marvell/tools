@@ -77,6 +77,7 @@ export function MermaidViewer() {
 
   const diagramRef = useRef<HTMLDivElement>(null);
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isHoveringControlsRef = useRef(false);
 
   const { state, controls, handlers, containerRef, setContainerRef } = usePanZoom({
     minZoom: MIN_ZOOM,
@@ -95,9 +96,20 @@ export function MermaidViewer() {
       clearTimeout(controlsTimeoutRef.current);
     }
     controlsTimeoutRef.current = setTimeout(() => {
-      if (hasCode) setShowControls(false);
+      if (hasCode && !isHoveringControlsRef.current) setShowControls(false);
     }, 2500);
   }, [hasCode]);
+
+  const keepControlsVisible = useCallback(() => {
+    isHoveringControlsRef.current = true;
+    setShowControls(true);
+    if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+  }, []);
+
+  const releaseControls = useCallback(() => {
+    isHoveringControlsRef.current = false;
+    showControlsTemporarily();
+  }, [showControlsTemporarily]);
 
   // Render diagram when code changes
   useEffect(() => {
@@ -429,7 +441,11 @@ export function MermaidViewer() {
         style={{ opacity: showControls ? 1 : 0 }}
       >
         {/* Top bar */}
-        <div className="absolute top-0 inset-x-0 p-4 flex items-center justify-between pointer-events-auto">
+        <div
+          className="absolute top-0 inset-x-0 p-4 flex items-center justify-between pointer-events-auto"
+          onMouseEnter={keepControlsVisible}
+          onMouseLeave={releaseControls}
+        >
           {/* Back / Clear */}
           <button
             onClick={handleClear}
@@ -508,6 +524,7 @@ export function MermaidViewer() {
           {/* Paste new */}
           <button
             onClick={handlePasteFromClipboard}
+            title="Paste a new diagram from clipboard (⌘V) — replaces the current one"
             className="flex items-center gap-2 px-3 py-2 text-sm text-white/50 hover:text-white/90 bg-white/[0.03] hover:bg-white/[0.08] border border-white/5 hover:border-white/10 rounded-lg backdrop-blur-sm transition-all"
           >
             <svg
