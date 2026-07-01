@@ -3,20 +3,67 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import mermaid from "mermaid";
 import { usePanZoom } from "./hooks/usePanZoom";
 
-// Initialize mermaid with dark theme
+const MERMAID_COLORS = {
+  background: "transparent",
+  canvas: "#0f172a",
+  text: "#f8fafc",
+  primary: "#4f46e5",
+  primaryBorder: "#818cf8",
+  secondary: "#059669",
+  secondaryBorder: "#34d399",
+  tertiary: "#9333ea",
+  tertiaryBorder: "#c084fc",
+  line: "#93c5fd",
+} as const;
+
+// Initialize mermaid with a colorful high-contrast dark theme
 mermaid.initialize({
   startOnLoad: false,
-  theme: "dark",
+  theme: "base",
   securityLevel: "loose",
   themeVariables: {
     darkMode: true,
-    background: "transparent",
-    primaryColor: "#6366f1",
-    primaryTextColor: "#f8fafc",
-    primaryBorderColor: "#4f46e5",
-    lineColor: "#64748b",
-    secondaryColor: "#1e293b",
-    tertiaryColor: "#0f172a",
+    background: MERMAID_COLORS.background,
+    mainBkg: "#1e1b4b",
+    secondBkg: "#064e3b",
+    tertiaryBkg: "#3b0764",
+    primaryColor: MERMAID_COLORS.primary,
+    primaryTextColor: MERMAID_COLORS.text,
+    primaryBorderColor: MERMAID_COLORS.primaryBorder,
+    secondaryColor: MERMAID_COLORS.secondary,
+    secondaryTextColor: "#ecfdf5",
+    secondaryBorderColor: MERMAID_COLORS.secondaryBorder,
+    tertiaryColor: MERMAID_COLORS.tertiary,
+    tertiaryTextColor: "#faf5ff",
+    tertiaryBorderColor: MERMAID_COLORS.tertiaryBorder,
+    lineColor: MERMAID_COLORS.line,
+    textColor: MERMAID_COLORS.text,
+    border1: MERMAID_COLORS.primaryBorder,
+    border2: MERMAID_COLORS.secondaryBorder,
+    noteBkgColor: "#422006",
+    noteTextColor: "#fef3c7",
+    noteBorderColor: "#f59e0b",
+    actorBkg: "#1e3a8a",
+    actorTextColor: "#eff6ff",
+    actorBorder: "#60a5fa",
+    actorLineColor: "#64748b",
+    signalColor: MERMAID_COLORS.text,
+    signalTextColor: MERMAID_COLORS.text,
+    labelBoxBkgColor: MERMAID_COLORS.canvas,
+    labelBoxBorderColor: "#38bdf8",
+    labelTextColor: MERMAID_COLORS.text,
+    loopTextColor: MERMAID_COLORS.text,
+    activationBkgColor: "#312e81",
+    activationBorderColor: "#a5b4fc",
+    sequenceNumberColor: MERMAID_COLORS.canvas,
+    cScale0: MERMAID_COLORS.primary,
+    cScale1: "#0891b2",
+    cScale2: MERMAID_COLORS.secondary,
+    cScale3: "#d97706",
+    cScale4: "#dc2626",
+    cScale5: MERMAID_COLORS.tertiary,
+    cScale6: "#db2777",
+    cScale7: "#2563eb",
   },
 });
 
@@ -27,6 +74,13 @@ const MAX_ZOOM = 5;
 const extractMermaidCode = (input: string) => {
   const fenceMatch = input.match(/```[ \t]*mermaid[^\n\r]*\r?\n([\s\S]*?)\r?\n```/i);
   return (fenceMatch?.[1] ?? input).trim();
+};
+
+const styleRenderedMermaidSvg = (svgEl: SVGSVGElement) => {
+  svgEl.style.maxWidth = "none";
+  svgEl.style.maxHeight = "none";
+  svgEl.style.background = MERMAID_COLORS.background;
+  svgEl.style.color = MERMAID_COLORS.text;
 };
 
 // Example diagrams
@@ -136,8 +190,7 @@ export function MermaidViewer() {
         // Style the SVG for better appearance
         const svgEl = diagramRef.current.querySelector("svg");
         if (svgEl) {
-          svgEl.style.maxWidth = "none";
-          svgEl.style.maxHeight = "none";
+          styleRenderedMermaidSvg(svgEl);
         }
 
         // Auto fit-to-view after layout
