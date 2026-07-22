@@ -81,6 +81,12 @@ mermaid.initialize({
 // Zoom constraints
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 5;
+const PNG_SCALE = 2;
+const MAX_CANVAS_DIMENSION = 16384;
+const MAX_CANVAS_PIXELS = 67_108_864;
+
+type ExportAction = "download" | "copy";
+type ExportFeedback = { type: "success" | "error"; message: string };
 
 const extractMermaidCode = (input: string) => {
   const fenceMatch = input.match(/```[ \t]*mermaid[^\n\r]*\r?\n([\s\S]*?)\r?\n```/i);
@@ -92,6 +98,82 @@ const styleRenderedMermaidSvg = (svgEl: SVGSVGElement) => {
   svgEl.style.maxHeight = "none";
   svgEl.style.background = MERMAID_COLORS.background;
   svgEl.style.color = MERMAID_COLORS.text;
+};
+
+const getSvgDimensions = (svgEl: SVGSVGElement) => {
+  const viewBox = svgEl.viewBox.baseVal;
+  if (viewBox.width > 0 && viewBox.height > 0) {
+    return { width: viewBox.width, height: viewBox.height };
+  }
+
+  const bounds = svgEl.getBBox();
+  if (bounds.width > 0 && bounds.height > 0) {
+    return { width: bounds.width, height: bounds.height };
+  }
+
+  throw new Error("The diagram has no exportable dimensions.");
+};
+
+const loadSvgImage = (source: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+
+    image.onload = () => {
+      resolve(image);
+    };
+    image.onerror = () => {
+      reject(new Error("The diagram could not be rendered as a PNG."));
+    };
+    image.src = source;
+  });
+
+const svgToPngBlob = async (svgEl: SVGSVGElement) => {
+  const { width, height } = getSvgDimensions(svgEl);
+  const canvasWidth = Math.ceil(width * PNG_SCALE);
+  const canvasHeight = Math.ceil(height * PNG_SCALE);
+
+  if (
+    canvasWidth > MAX_CANVAS_DIMENSION ||
+    canvasHeight > MAX_CANVAS_DIMENSION ||
+    canvasWidth * canvasHeight > MAX_CANVAS_PIXELS
+  ) {
+    throw new Error("The diagram is too large to export as a 2x PNG.");
+  }
+
+  const exportSvg = svgEl.cloneNode(true) as SVGSVGElement;
+  exportSvg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  exportSvg.setAttribute("width", String(width));
+  exportSvg.setAttribute("height", String(height));
+  exportSvg.style.maxWidth = "none";
+  exportSvg.style.maxHeight = "none";
+  exportSvg.style.background = "transparent";
+
+  const serializedSvg = new XMLSerializer().serializeToString(exportSvg);
+  const image = await loadSvgImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(serializedSvg)}`);
+  const canvas = document.createElement("canvas");
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("PNG export is not supported by this browser.");
+  }
+
+  context.drawImage(image, 0, 0, canvasWidth, canvasHeight);
+
+  return new Promise<Blob>((resolve, reject) => {
+    try {
+      canvas.toBlob(blob => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error("The PNG could not be created. The diagram may be too large."));
+        }
+      }, "image/png");
+    } catch {
+      reject(new Error("The PNG could not be created. The diagram may contain an external image."));
+    }
+  });
 };
 
 // Example diagrams
@@ -139,9 +221,12 @@ export function MermaidViewer() {
   const [error, setError] = useState<string | null>(null);
   const [showControls, setShowControls] = useState(true);
   const [isRendering, setIsRendering] = useState(false);
+  const [exportAction, setExportAction] = useState<ExportAction | null>(null);
+  const [exportFeedback, setExportFeedback] = useState<ExportFeedback | null>(null);
 
   const diagramRef = useRef<HTMLDivElement>(null);
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const feedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isHoveringControlsRef = useRef(false);
 
   const { state, controls, handlers, containerRef, setContainerRef } = usePanZoom({
@@ -153,6 +238,21 @@ export function MermaidViewer() {
   const { fitToView } = controls;
 
   const hasCode = code.trim().length > 0;
+  const exportDisabled = isRendering || exportAction !== null || error !== null;
+
+  const showExportFeedback = useCallback((feedback: ExportFeedback) => {
+    setExportFeedback(feedback);
+    if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
+    feedbackTimeoutRef.current = setTimeout(() => setExportFeedback(null), 3500);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+      if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
+    },
+    [],
+  );
 
   // Auto-hide controls after inactivity
   const showControlsTemporarily = useCallback(() => {
@@ -308,6 +408,7 @@ export function MermaidViewer() {
   const handleClear = () => {
     setCode("");
     setError(null);
+    setExportFeedback(null);
     controls.reset();
     setShowControls(true);
   };
@@ -327,6 +428,64 @@ export function MermaidViewer() {
   const handleLoadExample = (example: (typeof EXAMPLES)[0]) => {
     setCode(example.code);
     showControlsTemporarily();
+  };
+
+  const createPngBlob = async () => {
+    const svgEl = diagramRef.current?.querySelector("svg");
+    if (!svgEl) throw new Error("The diagram is not ready to export.");
+    return svgToPngBlob(svgEl);
+  };
+
+  const handleDownloadPng = async () => {
+    setExportAction("download");
+    setExportFeedback(null);
+
+    try {
+      const png = await createPngBlob();
+      const downloadUrl = URL.createObjectURL(png);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = "mermaid-diagram.png";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+      showExportFeedback({ type: "success", message: "PNG downloaded" });
+    } catch (exportError) {
+      showExportFeedback({
+        type: "error",
+        message: exportError instanceof Error ? exportError.message : "The PNG could not be downloaded.",
+      });
+    } finally {
+      setExportAction(null);
+    }
+  };
+
+  const handleCopyPng = async () => {
+    setExportAction("copy");
+    setExportFeedback(null);
+
+    try {
+      if (!window.isSecureContext || !navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+        throw new Error("Copying images is not supported by this browser or connection.");
+      }
+
+      const png = await createPngBlob();
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+      showExportFeedback({ type: "success", message: "PNG copied to clipboard" });
+    } catch (exportError) {
+      const permissionDenied = exportError instanceof DOMException && exportError.name === "NotAllowedError";
+      showExportFeedback({
+        type: "error",
+        message: permissionDenied
+          ? "Clipboard permission was denied."
+          : exportError instanceof Error
+            ? exportError.message
+            : "The PNG could not be copied.",
+      });
+    } finally {
+      setExportAction(null);
+    }
   };
 
   // Empty state - invitation to paste
@@ -499,6 +658,20 @@ export function MermaidViewer() {
         </div>
       )}
 
+      {exportFeedback && (
+        <div className="absolute top-16 right-4 z-30 max-w-sm" role="status" aria-live="polite">
+          <div
+            className={`px-4 py-3 border rounded-lg backdrop-blur-sm ${
+              exportFeedback.type === "success"
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                : "bg-red-500/10 border-red-500/30 text-red-300"
+            }`}
+          >
+            <p className="text-sm">{exportFeedback.message}</p>
+          </div>
+        </div>
+      )}
+
       {/* Controls overlay - auto-hiding */}
       <div
         className="absolute inset-0 z-20 pointer-events-none transition-opacity duration-300"
@@ -585,27 +758,70 @@ export function MermaidViewer() {
             </button>
           </div>
 
-          {/* Paste new */}
-          <button
-            onClick={handlePasteFromClipboard}
-            title="Paste a new diagram from clipboard (⌘V) — replaces the current one"
-            className="flex items-center gap-2 px-3 py-2 text-sm text-white/50 hover:text-white/90 bg-white/[0.03] hover:bg-white/[0.08] border border-white/5 hover:border-white/10 rounded-lg backdrop-blur-sm transition-all"
-          >
-            <svg
-              className="w-4 h-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
+          <div className="flex items-center gap-2">
+            {/* PNG export */}
+            <div className="flex items-center gap-1 p-1 bg-white/[0.03] border border-white/5 rounded-lg backdrop-blur-sm">
+              <button
+                onClick={handleDownloadPng}
+                disabled={exportDisabled}
+                title="Download the full diagram as a transparent 2x PNG"
+                className="flex items-center gap-2 px-3 h-8 text-sm text-white/50 hover:text-white/90 hover:bg-white/10 rounded transition-colors disabled:opacity-30 disabled:pointer-events-none"
+              >
+                <svg
+                  className={`w-4 h-4 ${exportAction === "download" ? "animate-pulse" : ""}`}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" />
+                </svg>
+                <span>{exportAction === "download" ? "Exporting…" : "Download PNG"}</span>
+              </button>
+
+              <div className="w-px h-5 bg-white/10" />
+
+              <button
+                onClick={handleCopyPng}
+                disabled={exportDisabled}
+                title="Copy the full diagram as a transparent 2x PNG"
+                className="flex items-center gap-2 px-3 h-8 text-sm text-white/50 hover:text-white/90 hover:bg-white/10 rounded transition-colors disabled:opacity-30 disabled:pointer-events-none"
+              >
+                <svg
+                  className={`w-4 h-4 ${exportAction === "copy" ? "animate-pulse" : ""}`}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V5a2 2 0 012-2h7a2 2 0 012 2v11a2 2 0 01-2 2h-2M7 21h7a2 2 0 002-2V8a2 2 0 00-2-2H7a2 2 0 00-2 2v11a2 2 0 002 2z" />
+                </svg>
+                <span>{exportAction === "copy" ? "Copying…" : "Copy PNG"}</span>
+              </button>
+            </div>
+
+            {/* Paste new */}
+            <button
+              onClick={handlePasteFromClipboard}
+              title="Paste a new diagram from clipboard (⌘V) — replaces the current one"
+              className="flex items-center gap-2 px-3 py-2 text-sm text-white/50 hover:text-white/90 bg-white/[0.03] hover:bg-white/[0.08] border border-white/5 hover:border-white/10 rounded-lg backdrop-blur-sm transition-all"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25z"
-              />
-            </svg>
-            <span>Paste new</span>
-          </button>
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125H8.25z"
+                />
+              </svg>
+              <span>Paste new</span>
+            </button>
+          </div>
         </div>
 
         {/* Bottom hint */}
