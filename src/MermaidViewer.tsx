@@ -114,6 +114,21 @@ const getSvgDimensions = (svgEl: SVGSVGElement) => {
   throw new Error("The diagram has no exportable dimensions.");
 };
 
+const getPngFilename = (date = new Date()) => {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const timestamp = [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    "T",
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join("");
+
+  return `mermaid_${timestamp}.png`;
+};
+
 const loadSvgImage = (source: string) =>
   new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
@@ -445,7 +460,7 @@ export function MermaidViewer() {
       const downloadUrl = URL.createObjectURL(png);
       const link = document.createElement("a");
       link.href = downloadUrl;
-      link.download = "mermaid-diagram.png";
+      link.download = getPngFilename();
       document.body.appendChild(link);
       link.click();
       link.remove();
