@@ -94,8 +94,14 @@ const extractMermaidCode = (input: string) => {
 };
 
 const styleRenderedMermaidSvg = (svgEl: SVGSVGElement) => {
+  const { width, height } = getSvgDimensions(svgEl);
+  svgEl.setAttribute("width", String(width));
+  svgEl.setAttribute("height", String(height));
   svgEl.style.maxWidth = "none";
   svgEl.style.maxHeight = "none";
+  svgEl.style.width = `${width}px`;
+  svgEl.style.height = `${height}px`;
+  svgEl.style.display = "block";
   svgEl.style.background = MERMAID_COLORS.background;
   svgEl.style.color = MERMAID_COLORS.text;
 };
@@ -244,12 +250,12 @@ export function MermaidViewer() {
   const feedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isHoveringControlsRef = useRef(false);
 
-  const { state, controls, handlers, containerRef, setContainerRef } = usePanZoom({
+  const { state, controls, handlers, containerRef, setContainerRef, setTransformRef } = usePanZoom({
     minZoom: MIN_ZOOM,
     maxZoom: MAX_ZOOM,
   });
 
-  const { zoom, pan, isDragging } = state;
+  const { zoom, isDragging } = state;
   const { fitToView } = controls;
 
   const hasCode = code.trim().length > 0;
@@ -324,7 +330,8 @@ export function MermaidViewer() {
           if (!isCurrent || !svgEl) return;
           const containerRect = containerRef.current?.getBoundingClientRect();
           if (containerRect) {
-            fitToView(svgEl.clientWidth, svgEl.clientHeight, containerRect.width, containerRect.height);
+            const { width, height } = getSvgDimensions(svgEl);
+            fitToView(width, height, containerRect.width, containerRect.height);
           }
         });
       } catch (err) {
@@ -400,12 +407,12 @@ export function MermaidViewer() {
   // Mouse movement shows controls
   useEffect(() => {
     const handleMouseMove = () => {
-      if (hasCode) showControlsTemporarily();
+      if (hasCode && !isDragging) showControlsTemporarily();
     };
 
     window.addEventListener("mousemove", handleMouseMove);
     return () => window.removeEventListener("mousemove", handleMouseMove);
-  }, [hasCode, showControlsTemporarily]);
+  }, [hasCode, isDragging, showControlsTemporarily]);
 
   // Control handlers
   const handleFitToView = () => {
@@ -414,8 +421,7 @@ export function MermaidViewer() {
     if (!svg) return;
 
     const containerRect = containerRef.current.getBoundingClientRect();
-    const svgWidth = svg.clientWidth || svg.getBoundingClientRect().width / zoom;
-    const svgHeight = svg.clientHeight || svg.getBoundingClientRect().height / zoom;
+    const { width: svgWidth, height: svgHeight } = getSvgDimensions(svg);
 
     controls.fitToView(svgWidth, svgHeight, containerRect.width, containerRect.height);
   };
@@ -636,25 +642,35 @@ export function MermaidViewer() {
       <div
         ref={setContainerRef}
         className="absolute inset-0 z-10"
-        style={{ cursor: isDragging ? "grabbing" : "grab" }}
-        onMouseDown={handlers.onMouseDown}
-        onMouseMove={handlers.onMouseMove}
-        onMouseUp={handlers.onMouseUp}
-        onMouseLeave={handlers.onMouseUp}
+        style={{
+          cursor: isDragging ? "grabbing" : "grab",
+          touchAction: "none",
+          userSelect: "none",
+          overscrollBehavior: "none",
+        }}
+        onPointerDown={handlers.onPointerDown}
+        onPointerMove={handlers.onPointerMove}
+        onPointerUp={handlers.onPointerUp}
+        onPointerCancel={handlers.onPointerCancel}
         onTouchStart={handlers.onTouchStart}
         onTouchMove={handlers.onTouchMove}
         onTouchEnd={handlers.onTouchEnd}
       >
-        {/* Diagram container */}
-        <div
-          ref={diagramRef}
-          className="absolute inset-0 flex items-center justify-center transition-opacity duration-300"
-          style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-            transformOrigin: "center center",
-            opacity: isRendering ? 0.5 : 1,
-          }}
-        />
+        <div className="absolute inset-0 flex items-center justify-center overflow-visible">
+          {/* Only the diagram-sized layer is composited and moved. */}
+          <div
+            ref={setTransformRef}
+            className="shrink-0 transition-opacity duration-300"
+            style={{
+              transformOrigin: "center center",
+              willChange: "transform",
+              backfaceVisibility: "hidden",
+              opacity: isRendering ? 0.5 : 1,
+            }}
+          >
+            <div ref={diagramRef} />
+          </div>
+        </div>
 
         {/* Loading indicator */}
         {isRendering && (

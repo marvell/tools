@@ -1,23 +1,24 @@
 import { useState, useRef, useEffect, useCallback, type RefObject } from "react";
 
-// Zoom constraints
 const DEFAULT_MIN_ZOOM = 0.1;
 const DEFAULT_MAX_ZOOM = 5;
+const FRAME_DURATION = 1000 / 60;
+const FRICTION_PER_FRAME = 0.92;
+const MIN_VELOCITY = 0.03;
+const VELOCITY_STALE_AFTER = 80;
 
-// Momentum physics constants
-const FRICTION = 0.92;
-const MIN_VELOCITY = 0.5;
+type Point = { x: number; y: number };
+type ViewState = { zoom: number; pan: Point };
 
 export interface PanZoomConfig {
   minZoom?: number;
   maxZoom?: number;
   initialZoom?: number;
-  initialPan?: { x: number; y: number };
+  initialPan?: Point;
 }
 
 export interface PanZoomState {
   zoom: number;
-  pan: { x: number; y: number };
   isDragging: boolean;
 }
 
@@ -26,17 +27,24 @@ export interface PanZoomControls {
   zoomOut: () => void;
   reset: () => void;
   setZoom: (zoom: number) => void;
-  setPan: (pan: { x: number; y: number }) => void;
-  fitToView: (contentWidth: number, contentHeight: number, containerWidth: number, containerHeight: number, padding?: number) => void;
+  setPan: (pan: Point) => void;
+  fitToView: (
+    contentWidth: number,
+    contentHeight: number,
+    containerWidth: number,
+    containerHeight: number,
+    padding?: number,
+  ) => void;
 }
 
 export interface PanZoomHandlers {
-  onMouseDown: (e: React.MouseEvent) => void;
-  onMouseMove: (e: React.MouseEvent) => void;
-  onMouseUp: () => void;
-  onTouchStart: (e: React.TouchEvent) => void;
-  onTouchMove: (e: React.TouchEvent) => void;
-  onTouchEnd: (e: React.TouchEvent) => void;
+  onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onPointerMove: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onPointerUp: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onPointerCancel: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onTouchStart: (event: React.TouchEvent<HTMLDivElement>) => void;
+  onTouchMove: (event: React.TouchEvent<HTMLDivElement>) => void;
+  onTouchEnd: (event: React.TouchEvent<HTMLDivElement>) => void;
 }
 
 export interface UsePanZoomResult {
@@ -45,32 +53,46 @@ export interface UsePanZoomResult {
   handlers: PanZoomHandlers;
   containerRef: RefObject<HTMLDivElement | null>;
   setContainerRef: (node: HTMLDivElement | null) => void;
+  setTransformRef: (node: HTMLDivElement | null) => void;
 }
 
-export function usePanZoom(config: PanZoomConfig = {}): UsePanZoomResult {
-  const {
-    minZoom = DEFAULT_MIN_ZOOM,
-    maxZoom = DEFAULT_MAX_ZOOM,
-    initialZoom = 1,
-    initialPan = { x: 0, y: 0 },
-  } = config;
+const applyTransform = (element: HTMLDivElement, view: ViewState) => {
+  const pixelRatio = window.devicePixelRatio || 1;
+  const x = Math.round(view.pan.x * pixelRatio) / pixelRatio;
+  const y = Math.round(view.pan.y * pixelRatio) / pixelRatio;
+  element.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${view.zoom})`;
+};
 
-  const [zoom, setZoom] = useState(initialZoom);
-  const [pan, setPan] = useState(initialPan);
+const normalizeWheelDelta = (value: number, mode: number, pageSize: number) => {
+  if (mode === WheelEvent.DOM_DELTA_LINE) return value * 16;
+  if (mode === WheelEvent.DOM_DELTA_PAGE) return value * pageSize;
+  return value;
+};
+
+export function usePanZoom(config: PanZoomConfig = {}): UsePanZoomResult {
+  const minZoom = config.minZoom ?? DEFAULT_MIN_ZOOM;
+  const maxZoom = config.maxZoom ?? DEFAULT_MAX_ZOOM;
+  const initialZoom = Math.min(Math.max(config.initialZoom ?? 1, minZoom), maxZoom);
+  const initialPanX = config.initialPan?.x ?? 0;
+  const initialPanY = config.initialPan?.y ?? 0;
+
+  const [zoom, setRenderedZoom] = useState(initialZoom);
   const [isDragging, setIsDragging] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const transformRef = useRef<HTMLDivElement>(null);
   const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
+  const viewRef = useRef<ViewState>({
+    zoom: initialZoom,
+    pan: { x: initialPanX, y: initialPanY },
+  });
+  const renderedZoomRef = useRef(initialZoom);
+  const viewFrameRef = useRef<number | null>(null);
+  const momentumRef = useRef<number | null>(null);
 
-  // Callback ref so the wheel listener (re)attaches whenever the canvas mounts.
-  const setContainer = useCallback((node: HTMLDivElement | null) => {
-    containerRef.current = node;
-    setContainerEl(node);
-  }, []);
-
-  // Refs for gesture tracking (avoid stale closures)
-  const stateRef = useRef({ zoom: initialZoom, pan: initialPan });
   const dragRef = useRef({
+    active: false,
+    pointerId: null as number | null,
     startX: 0,
     startY: 0,
     panStartX: 0,
@@ -81,104 +103,224 @@ export function usePanZoom(config: PanZoomConfig = {}): UsePanZoomResult {
     velocityX: 0,
     velocityY: 0,
   });
+
   const touchRef = useRef<{
     startDist: number;
     startZoom: number;
     centerX: number;
     centerY: number;
+    startCenterClientX: number;
+    startCenterClientY: number;
     startPanX: number;
     startPanY: number;
   } | null>(null);
-  const momentumRef = useRef<number | null>(null);
 
-  // Keep stateRef in sync
-  useEffect(() => {
-    stateRef.current = { zoom, pan };
-  }, [zoom, pan]);
-
-  // Clamp zoom to bounds
   const clampZoom = useCallback(
-    (z: number) => Math.min(Math.max(z, minZoom), maxZoom),
-    [minZoom, maxZoom]
+    (value: number) => Math.min(Math.max(value, minZoom), maxZoom),
+    [minZoom, maxZoom],
   );
 
-  // Stop any ongoing momentum animation
+  const renderCurrentView = useCallback(() => {
+    if (transformRef.current) {
+      applyTransform(transformRef.current, viewRef.current);
+    }
+
+    if (renderedZoomRef.current !== viewRef.current.zoom) {
+      renderedZoomRef.current = viewRef.current.zoom;
+      setRenderedZoom(viewRef.current.zoom);
+    }
+  }, []);
+
+  const scheduleViewRender = useCallback(() => {
+    if (viewFrameRef.current !== null) return;
+
+    viewFrameRef.current = requestAnimationFrame(() => {
+      viewFrameRef.current = null;
+      renderCurrentView();
+    });
+  }, [renderCurrentView]);
+
+  const renderViewImmediately = useCallback(() => {
+    if (viewFrameRef.current !== null) {
+      cancelAnimationFrame(viewFrameRef.current);
+      viewFrameRef.current = null;
+    }
+    renderCurrentView();
+  }, [renderCurrentView]);
+
+  const setContainerRef = useCallback((node: HTMLDivElement | null) => {
+    containerRef.current = node;
+    setContainerEl(node);
+  }, []);
+
+  const setTransformRef = useCallback((node: HTMLDivElement | null) => {
+    transformRef.current = node;
+    if (node) applyTransform(node, viewRef.current);
+  }, []);
+
   const stopMomentum = useCallback(() => {
-    if (momentumRef.current) {
+    if (momentumRef.current !== null) {
       cancelAnimationFrame(momentumRef.current);
       momentumRef.current = null;
     }
   }, []);
 
-  // Start momentum animation after drag release
   const startMomentum = useCallback(() => {
-    const animate = () => {
+    stopMomentum();
+    let lastFrameTime = performance.now();
+
+    const animate = (time: number) => {
       const drag = dragRef.current;
+      const elapsed = Math.max(time - lastFrameTime, 0);
+      lastFrameTime = time;
 
-      // Apply friction
-      drag.velocityX *= FRICTION;
-      drag.velocityY *= FRICTION;
+      // Avoid a large jump when an animation resumes after the page was suspended.
+      if (elapsed > 100) {
+        momentumRef.current = null;
+        return;
+      }
 
-      // Stop when velocity is negligible
+      const decay = Math.pow(FRICTION_PER_FRAME, elapsed / FRAME_DURATION);
+      drag.velocityX *= decay;
+      drag.velocityY *= decay;
+
       if (Math.abs(drag.velocityX) < MIN_VELOCITY && Math.abs(drag.velocityY) < MIN_VELOCITY) {
         momentumRef.current = null;
         return;
       }
 
-      // Update pan
-      setPan((p) => ({
-        x: p.x + drag.velocityX,
-        y: p.y + drag.velocityY,
-      }));
-
+      const current = viewRef.current;
+      viewRef.current = {
+        zoom: current.zoom,
+        pan: {
+          x: current.pan.x + drag.velocityX * elapsed,
+          y: current.pan.y + drag.velocityY * elapsed,
+        },
+      };
+      renderCurrentView();
       momentumRef.current = requestAnimationFrame(animate);
     };
 
     momentumRef.current = requestAnimationFrame(animate);
+  }, [renderCurrentView, stopMomentum]);
+
+  const beginDrag = useCallback((
+    clientX: number,
+    clientY: number,
+    pointerId: number | null = null,
+    eventTime = performance.now(),
+  ) => {
+    const currentPan = viewRef.current.pan;
+
+    dragRef.current = {
+      active: true,
+      pointerId,
+      startX: clientX,
+      startY: clientY,
+      panStartX: currentPan.x,
+      panStartY: currentPan.y,
+      lastX: clientX,
+      lastY: clientY,
+      lastTime: eventTime,
+      velocityX: 0,
+      velocityY: 0,
+    };
+    setIsDragging(true);
   }, []);
 
-  // Handle wheel/trackpad gestures (Figma/Miro style):
-  // - Pinch (ctrlKey) or Cmd/Ctrl + scroll => zoom towards cursor
-  // - Plain two-finger swipe => pan
+  const updateDrag = useCallback(
+    (clientX: number, clientY: number, eventTime = performance.now()) => {
+      const drag = dragRef.current;
+      if (!drag.active) return;
+
+      const elapsed = Math.max(eventTime - drag.lastTime, 1);
+      if (elapsed > 0) {
+        drag.velocityX = (clientX - drag.lastX) / elapsed;
+        drag.velocityY = (clientY - drag.lastY) / elapsed;
+      }
+      drag.lastX = clientX;
+      drag.lastY = clientY;
+      drag.lastTime = eventTime;
+
+      viewRef.current = {
+        zoom: viewRef.current.zoom,
+        pan: {
+          x: drag.panStartX + clientX - drag.startX,
+          y: drag.panStartY + clientY - drag.startY,
+        },
+      };
+      scheduleViewRender();
+    },
+    [scheduleViewRender],
+  );
+
+  const finishDrag = useCallback(
+    (withMomentum: boolean) => {
+      const drag = dragRef.current;
+      if (!drag.active) return;
+
+      drag.active = false;
+      drag.pointerId = null;
+      setIsDragging(false);
+      renderViewImmediately();
+
+      if (performance.now() - drag.lastTime > VELOCITY_STALE_AFTER) {
+        drag.velocityX = 0;
+        drag.velocityY = 0;
+      }
+
+      if (
+        withMomentum &&
+        (Math.abs(drag.velocityX) >= MIN_VELOCITY || Math.abs(drag.velocityY) >= MIN_VELOCITY)
+      ) {
+        startMomentum();
+      }
+    },
+    [renderViewImmediately, startMomentum],
+  );
+
   const handleWheel = useCallback(
-    (e: WheelEvent) => {
-      e.preventDefault();
+    (event: WheelEvent) => {
+      event.preventDefault();
       stopMomentum();
 
       const container = containerRef.current;
       if (!container) return;
 
-      const rect = container.getBoundingClientRect();
+      const deltaX = normalizeWheelDelta(event.deltaX, event.deltaMode, container.clientWidth);
+      const deltaY = normalizeWheelDelta(event.deltaY, event.deltaMode, container.clientHeight);
+      const current = viewRef.current;
 
-      // Browsers report trackpad pinch as a wheel event with ctrlKey set.
-      const isZoomGesture = e.ctrlKey || e.metaKey;
+      if (event.ctrlKey || event.metaKey) {
+        const rect = container.getBoundingClientRect();
+        const cursorX = event.clientX - rect.left - rect.width / 2;
+        const cursorY = event.clientY - rect.top - rect.height / 2;
+        const limitedDelta = Math.min(Math.max(deltaY, -100), 100);
+        const nextZoom = clampZoom(current.zoom * Math.exp(-limitedDelta * 0.01));
+        const zoomRatio = nextZoom / current.zoom;
 
-      if (isZoomGesture) {
-        const cursorX = e.clientX - rect.left - rect.width / 2;
-        const cursorY = e.clientY - rect.top - rect.height / 2;
-
-        // Exponential scaling keeps zoom speed smooth across pinch and scroll.
-        const oldZoom = stateRef.current.zoom;
-        const newZoom = clampZoom(oldZoom * Math.exp(-e.deltaY * 0.01));
-
-        // Adjust pan to keep cursor point stationary
-        const zoomRatio = newZoom / oldZoom;
-        const oldPan = stateRef.current.pan;
-        const newPanX = cursorX - (cursorX - oldPan.x) * zoomRatio;
-        const newPanY = cursorY - (cursorY - oldPan.y) * zoomRatio;
-
-        setZoom(newZoom);
-        setPan({ x: newPanX, y: newPanY });
+        viewRef.current = {
+          zoom: nextZoom,
+          pan: {
+            x: cursorX - (cursorX - current.pan.x) * zoomRatio,
+            y: cursorY - (cursorY - current.pan.y) * zoomRatio,
+          },
+        };
       } else {
-        // Two-finger swipe pans the canvas (natural scrolling direction).
-        const oldPan = stateRef.current.pan;
-        setPan({ x: oldPan.x - e.deltaX, y: oldPan.y - e.deltaY });
+        viewRef.current = {
+          zoom: current.zoom,
+          pan: {
+            x: current.pan.x - deltaX,
+            y: current.pan.y - deltaY,
+          },
+        };
       }
+
+      scheduleViewRender();
     },
-    [clampZoom, stopMomentum]
+    [clampZoom, scheduleViewRender, stopMomentum],
   );
 
-  // Setup wheel event listener (re-runs when the container element mounts)
   useEffect(() => {
     if (!containerEl) return;
 
@@ -186,253 +328,242 @@ export function usePanZoom(config: PanZoomConfig = {}): UsePanZoomResult {
     return () => containerEl.removeEventListener("wheel", handleWheel);
   }, [containerEl, handleWheel]);
 
-  // Cleanup momentum on unmount
-  useEffect(() => {
-    return () => stopMomentum();
-  }, [stopMomentum]);
-
-  // Mouse drag handlers with momentum
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      if (e.button !== 0) return;
+  useEffect(
+    () => () => {
       stopMomentum();
-      setIsDragging(true);
-
-      const now = Date.now();
-      dragRef.current = {
-        startX: e.clientX,
-        startY: e.clientY,
-        panStartX: stateRef.current.pan.x,
-        panStartY: stateRef.current.pan.y,
-        lastX: e.clientX,
-        lastY: e.clientY,
-        lastTime: now,
-        velocityX: 0,
-        velocityY: 0,
-      };
+      if (viewFrameRef.current !== null) cancelAnimationFrame(viewFrameRef.current);
     },
-    [stopMomentum]
+    [stopMomentum],
   );
 
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!dragRef.current.lastTime) return;
-
-    const now = Date.now();
-    const drag = dragRef.current;
-    const dt = Math.max(now - drag.lastTime, 1);
-
-    // Calculate velocity for momentum
-    drag.velocityX = ((e.clientX - drag.lastX) / dt) * 16; // normalize to ~60fps
-    drag.velocityY = ((e.clientY - drag.lastY) / dt) * 16;
-    drag.lastX = e.clientX;
-    drag.lastY = e.clientY;
-    drag.lastTime = now;
-
-    // Update pan position
-    const dx = e.clientX - drag.startX;
-    const dy = e.clientY - drag.startY;
-    setPan({ x: drag.panStartX + dx, y: drag.panStartY + dy });
-  }, []);
-
-  const handleMouseUp = useCallback(() => {
-    if (!isDragging) return;
-    setIsDragging(false);
-
-    // Start momentum if there's velocity
-    const drag = dragRef.current;
-    if (Math.abs(drag.velocityX) > MIN_VELOCITY || Math.abs(drag.velocityY) > MIN_VELOCITY) {
-      startMomentum();
-    }
-
-    // Reset lastTime to prevent handleMouseMove from processing further movements
-    drag.lastTime = 0;
-  }, [isDragging, startMomentum]);
-
-  // Touch handlers
-  const handleTouchStart = useCallback(
-    (e: React.TouchEvent) => {
-      stopMomentum();
-
-      const container = containerRef.current;
-      if (!container) return;
-      const rect = container.getBoundingClientRect();
-
-      if (e.touches.length === 2) {
-        // Pinch zoom start - store center point for zoom-to-point
-        const touch0 = e.touches[0]!;
-        const touch1 = e.touches[1]!;
-        const centerX = (touch0.clientX + touch1.clientX) / 2;
-        const centerY = (touch0.clientY + touch1.clientY) / 2;
-        const dist = Math.hypot(touch0.clientX - touch1.clientX, touch0.clientY - touch1.clientY);
-
-        touchRef.current = {
-          startDist: dist,
-          startZoom: stateRef.current.zoom,
-          centerX: centerX - rect.left - rect.width / 2,
-          centerY: centerY - rect.top - rect.height / 2,
-          startPanX: stateRef.current.pan.x,
-          startPanY: stateRef.current.pan.y,
-        };
-        setIsDragging(false);
-      } else if (e.touches.length === 1) {
-        // Single finger pan
-        const touch = e.touches[0]!;
-        setIsDragging(true);
-        const now = Date.now();
-        dragRef.current = {
-          startX: touch.clientX,
-          startY: touch.clientY,
-          panStartX: stateRef.current.pan.x,
-          panStartY: stateRef.current.pan.y,
-          lastX: touch.clientX,
-          lastY: touch.clientY,
-          lastTime: now,
-          velocityX: 0,
-          velocityY: 0,
-        };
-      }
-    },
-    [stopMomentum]
-  );
-
-  const handleTouchMove = useCallback(
-    (e: React.TouchEvent) => {
-      const container = containerRef.current;
-      if (!container) return;
-      const rect = container.getBoundingClientRect();
-
-      if (e.touches.length === 2 && touchRef.current) {
-        // Pinch zoom - zoom towards pinch center
-        const touch0 = e.touches[0]!;
-        const touch1 = e.touches[1]!;
-        const currentCenterX = (touch0.clientX + touch1.clientX) / 2;
-        const currentCenterY = (touch0.clientY + touch1.clientY) / 2;
-        const dist = Math.hypot(touch0.clientX - touch1.clientX, touch0.clientY - touch1.clientY);
-
-        const scale = dist / touchRef.current.startDist;
-        const newZoom = clampZoom(touchRef.current.startZoom * scale);
-
-        // Calculate pan adjustment to zoom towards pinch center
-        const touch = touchRef.current;
-        const zoomRatio = newZoom / touch.startZoom;
-
-        // Also allow panning while pinching (two-finger drag)
-        const panDeltaX = currentCenterX - rect.left - rect.width / 2 - touch.centerX;
-        const panDeltaY = currentCenterY - rect.top - rect.height / 2 - touch.centerY;
-
-        const newPanX = touch.centerX - (touch.centerX - touch.startPanX) * zoomRatio + panDeltaX;
-        const newPanY = touch.centerY - (touch.centerY - touch.startPanY) * zoomRatio + panDeltaY;
-
-        setZoom(newZoom);
-        setPan({ x: newPanX, y: newPanY });
-      } else if (e.touches.length === 1 && isDragging) {
-        // Single finger pan with velocity tracking
-        const touch = e.touches[0]!;
-        const now = Date.now();
-        const drag = dragRef.current;
-        const dt = Math.max(now - drag.lastTime, 1);
-
-        drag.velocityX = ((touch.clientX - drag.lastX) / dt) * 16;
-        drag.velocityY = ((touch.clientY - drag.lastY) / dt) * 16;
-        drag.lastX = touch.clientX;
-        drag.lastY = touch.clientY;
-        drag.lastTime = now;
-
-        const dx = touch.clientX - drag.startX;
-        const dy = touch.clientY - drag.startY;
-        setPan({ x: drag.panStartX + dx, y: drag.panStartY + dy });
-      }
-    },
-    [clampZoom, isDragging]
-  );
-
-  const handleTouchEnd = useCallback(
-    (e: React.TouchEvent) => {
-      // If still have touches, might be transitioning from pinch to pan
-      if (e.touches.length === 1) {
-        // Transition from pinch to pan
-        const touch = e.touches[0]!;
-        setIsDragging(true);
-        touchRef.current = null;
-        const now = Date.now();
-        dragRef.current = {
-          startX: touch.clientX,
-          startY: touch.clientY,
-          panStartX: stateRef.current.pan.x,
-          panStartY: stateRef.current.pan.y,
-          lastX: touch.clientX,
-          lastY: touch.clientY,
-          lastTime: now,
-          velocityX: 0,
-          velocityY: 0,
-        };
+  const handlePointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.pointerType === "touch" || event.button !== 0) return;
+      if (
+        event.target instanceof Element &&
+        event.target.closest("a, button, input, textarea, select, [role='button'], [contenteditable='true']")
+      ) {
         return;
       }
 
-      // All fingers lifted
-      touchRef.current = null;
+      event.preventDefault();
+      stopMomentum();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      beginDrag(event.clientX, event.clientY, event.pointerId, event.timeStamp);
+    },
+    [beginDrag, stopMomentum],
+  );
 
-      if (isDragging) {
-        setIsDragging(false);
-        // Start momentum for touch pan
-        const drag = dragRef.current;
-        if (Math.abs(drag.velocityX) > MIN_VELOCITY || Math.abs(drag.velocityY) > MIN_VELOCITY) {
-          startMomentum();
+  const handlePointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const drag = dragRef.current;
+      if (!drag.active || drag.pointerId !== event.pointerId) return;
+      if ((event.buttons & 1) === 0) {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
         }
+        finishDrag(true);
+        return;
+      }
+
+      const samples = event.nativeEvent.getCoalescedEvents?.();
+      const latest = samples?.[samples.length - 1] ?? event.nativeEvent;
+      updateDrag(latest.clientX, latest.clientY, latest.timeStamp);
+    },
+    [finishDrag, updateDrag],
+  );
+
+  const handlePointerUp = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (dragRef.current.pointerId !== event.pointerId) return;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      finishDrag(true);
+    },
+    [finishDrag],
+  );
+
+  const handlePointerCancel = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (dragRef.current.pointerId !== event.pointerId) return;
+      finishDrag(false);
+    },
+    [finishDrag],
+  );
+
+  const handleTouchStart = useCallback(
+    (event: React.TouchEvent<HTMLDivElement>) => {
+      stopMomentum();
+
+      if (event.touches.length === 2) {
+        const container = containerRef.current;
+        if (!container) return;
+
+        const touch0 = event.touches[0]!;
+        const touch1 = event.touches[1]!;
+        const centerClientX = (touch0.clientX + touch1.clientX) / 2;
+        const centerClientY = (touch0.clientY + touch1.clientY) / 2;
+        const rect = container.getBoundingClientRect();
+        const current = viewRef.current;
+
+        touchRef.current = {
+          startDist: Math.hypot(touch0.clientX - touch1.clientX, touch0.clientY - touch1.clientY),
+          startZoom: current.zoom,
+          centerX: centerClientX - rect.left - rect.width / 2,
+          centerY: centerClientY - rect.top - rect.height / 2,
+          startCenterClientX: centerClientX,
+          startCenterClientY: centerClientY,
+          startPanX: current.pan.x,
+          startPanY: current.pan.y,
+        };
+        dragRef.current.active = false;
+        setIsDragging(false);
+      } else if (event.touches.length === 1) {
+        const touch = event.touches[0]!;
+        beginDrag(touch.clientX, touch.clientY, null, event.timeStamp);
       }
     },
-    [isDragging, startMomentum]
+    [beginDrag, stopMomentum],
   );
 
-  // Zoom towards the viewport center (keeps the centered point stationary)
+  const handleTouchMove = useCallback(
+    (event: React.TouchEvent<HTMLDivElement>) => {
+      if (event.touches.length === 2 && touchRef.current) {
+        const touch0 = event.touches[0]!;
+        const touch1 = event.touches[1]!;
+        const currentCenterX = (touch0.clientX + touch1.clientX) / 2;
+        const currentCenterY = (touch0.clientY + touch1.clientY) / 2;
+        const distance = Math.hypot(touch0.clientX - touch1.clientX, touch0.clientY - touch1.clientY);
+        const touch = touchRef.current;
+        const nextZoom = clampZoom(touch.startZoom * (distance / touch.startDist));
+        const zoomRatio = nextZoom / touch.startZoom;
+
+        viewRef.current = {
+          zoom: nextZoom,
+          pan: {
+            x:
+              touch.centerX -
+              (touch.centerX - touch.startPanX) * zoomRatio +
+              currentCenterX -
+              touch.startCenterClientX,
+            y:
+              touch.centerY -
+              (touch.centerY - touch.startPanY) * zoomRatio +
+              currentCenterY -
+              touch.startCenterClientY,
+          },
+        };
+        scheduleViewRender();
+      } else if (event.touches.length === 1) {
+        const touch = event.touches[0]!;
+        updateDrag(touch.clientX, touch.clientY, event.timeStamp);
+      }
+    },
+    [clampZoom, scheduleViewRender, updateDrag],
+  );
+
+  const handleTouchEnd = useCallback(
+    (event: React.TouchEvent<HTMLDivElement>) => {
+      if (event.touches.length === 1) {
+        const touch = event.touches[0]!;
+        touchRef.current = null;
+        beginDrag(touch.clientX, touch.clientY, null, event.timeStamp);
+        return;
+      }
+
+      touchRef.current = null;
+      finishDrag(true);
+    },
+    [beginDrag, finishDrag],
+  );
+
+  const setZoom = useCallback(
+    (value: number) => {
+      stopMomentum();
+      viewRef.current = { ...viewRef.current, zoom: clampZoom(value) };
+      renderViewImmediately();
+    },
+    [clampZoom, renderViewImmediately, stopMomentum],
+  );
+
+  const setPan = useCallback(
+    (pan: Point) => {
+      stopMomentum();
+      viewRef.current = { ...viewRef.current, pan };
+      renderViewImmediately();
+    },
+    [renderViewImmediately, stopMomentum],
+  );
+
   const zoomBy = useCallback(
     (factor: number) => {
-      const oldZoom = stateRef.current.zoom;
-      const newZoom = clampZoom(oldZoom * factor);
-      if (newZoom === oldZoom) return;
+      stopMomentum();
+      const current = viewRef.current;
+      const nextZoom = clampZoom(current.zoom * factor);
+      if (nextZoom === current.zoom) return;
 
-      const zoomRatio = newZoom / oldZoom;
-      const oldPan = stateRef.current.pan;
-      setZoom(newZoom);
-      setPan({ x: oldPan.x * zoomRatio, y: oldPan.y * zoomRatio });
+      const zoomRatio = nextZoom / current.zoom;
+      viewRef.current = {
+        zoom: nextZoom,
+        pan: {
+          x: current.pan.x * zoomRatio,
+          y: current.pan.y * zoomRatio,
+        },
+      };
+      renderViewImmediately();
     },
-    [clampZoom]
+    [clampZoom, renderViewImmediately, stopMomentum],
   );
 
-  // Control functions
   const zoomIn = useCallback(() => zoomBy(1.2), [zoomBy]);
-
   const zoomOut = useCallback(() => zoomBy(1 / 1.2), [zoomBy]);
 
   const reset = useCallback(() => {
-    setZoom(initialZoom);
-    setPan(initialPan);
-  }, [initialZoom, initialPan]);
+    stopMomentum();
+    viewRef.current = {
+      zoom: initialZoom,
+      pan: { x: initialPanX, y: initialPanY },
+    };
+    renderViewImmediately();
+  }, [initialPanX, initialPanY, initialZoom, renderViewImmediately, stopMomentum]);
 
   const fitToView = useCallback(
-    (contentWidth: number, contentHeight: number, containerWidth: number, containerHeight: number, padding = 80) => {
-      const scaleX = (containerWidth - padding) / contentWidth;
-      const scaleY = (containerHeight - padding) / contentHeight;
-      const newZoom = clampZoom(Math.min(scaleX, scaleY, 2));
+    (
+      contentWidth: number,
+      contentHeight: number,
+      containerWidth: number,
+      containerHeight: number,
+      padding = 80,
+    ) => {
+      if (contentWidth <= 0 || contentHeight <= 0 || containerWidth <= 0 || containerHeight <= 0) return;
 
-      setZoom(newZoom);
-      setPan({ x: 0, y: 0 });
+      stopMomentum();
+      const scaleX = Math.max(containerWidth - padding, 1) / contentWidth;
+      const scaleY = Math.max(containerHeight - padding, 1) / contentHeight;
+      viewRef.current = {
+        zoom: clampZoom(Math.min(scaleX, scaleY, 2)),
+        pan: { x: 0, y: 0 },
+      };
+      renderViewImmediately();
     },
-    [clampZoom]
+    [clampZoom, renderViewImmediately, stopMomentum],
   );
 
   return {
-    state: { zoom, pan, isDragging },
+    state: { zoom, isDragging },
     controls: { zoomIn, zoomOut, reset, setZoom, setPan, fitToView },
     handlers: {
-      onMouseDown: handleMouseDown,
-      onMouseMove: handleMouseMove,
-      onMouseUp: handleMouseUp,
+      onPointerDown: handlePointerDown,
+      onPointerMove: handlePointerMove,
+      onPointerUp: handlePointerUp,
+      onPointerCancel: handlePointerCancel,
       onTouchStart: handleTouchStart,
       onTouchMove: handleTouchMove,
       onTouchEnd: handleTouchEnd,
     },
     containerRef,
-    setContainerRef: setContainer,
+    setContainerRef,
+    setTransformRef,
   };
 }
